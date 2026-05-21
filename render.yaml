@@ -1,0 +1,17 @@
+# render.yaml — One-click deploy on Render.com (free)
+# Push this file to GitHub, then connect repo on render.com
+
+services:
+  - type: web
+    name: bandhanpay
+    env: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
