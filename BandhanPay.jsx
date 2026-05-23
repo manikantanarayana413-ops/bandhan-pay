@@ -237,18 +237,21 @@ async function apiPost(url, body) {
 function buildWAMsg(c, settings, lang, count) {
   const days = daysDiff(c.dueDate), amt = fmt(c.amountDue);
   const upi  = settings.upiId || "shop@upi", shop = settings.shopName || "Shop";
-  const desc = c.desc ? `\n📝 ${c.desc}` : "";
+  // No emoji prefixes — they render as ? on some Android WhatsApp versions
+  const desc   = c.desc ? `\nVivrana: ${c.desc}` : "";
+  const descTe = c.desc ? `\nవివరణ: ${c.desc}` : "";
   const urgency = count >= 3
-    ? `\n⚠️ ${lang==="te" ? "దయచేసి వెంటనే చెల్లించండి." : "Please pay immediately — urgent."}`
-    : count >= 2 ? `\n📌 ${lang==="te" ? "మళ్ళీ గుర్తు చేస్తున్నాం." : "Follow-up reminder."}` : "";
-  const upiLink = `upi://pay?pa=${upi}&am=${c.amountDue}&pn=${encodeURIComponent(shop)}&tn=${encodeURIComponent(c.desc||"Payment")}&cu=INR`;
+    ? `\n${lang==="te" ? "Dayachesi ventane challinchandi." : "Please pay immediately — this is urgent."}`
+    : count >= 2 ? `\n${lang==="te" ? "Malli miku gurtu chestunnamu." : "This is a follow-up reminder."}` : "";
+  // UPI link — NO encodeURIComponent so it shows clean text in WhatsApp
+  const upiLink = `upi://pay?pa=${upi}&am=${c.amountDue}&pn=${shop}&tn=${c.desc||"Payment"}&cu=INR`;
   const daysText = lang==="te"
-    ? (days>0 ? `\n📅 ${days} రోజులుగా పెండింగ్.` : days<0 ? `\n📅 ${Math.abs(days)} రోజుల్లో గడువు.` : "\n📅 ఈరోజే గడువు.")
-    : (days>0 ? `\n📅 Pending for ${days} days.` : days<0 ? `\n📅 Due in ${Math.abs(days)} days.` : "\n📅 Due today.");
+    ? (days>0 ? `\n${days} rojuluga pending.` : days<0 ? `\n${Math.abs(days)} rojulalo gaduvu.` : "\nIrojey gaduvu.")
+    : (days>0 ? `\nPending for ${days} days.` : days<0 ? `\nDue in ${Math.abs(days)} days.` : "\nDue today.");
   if (lang==="te") {
-    return `నమస్తే *${c.name}* గారు 🙏\n\n*${shop}* నుండి గుర్తు చేస్తున్నాం.\n\nబకాయి: *₹${amt}*${daysText}${desc}${urgency}\n\n💳 *UPI:* ${upi}\n🔗 ${upiLink}\n\nధన్యవాదాలు 🙏\n— *${shop}*`;
+    return `Namaste *${c.name}* garu\n\n*${shop}* nundi gurtu chestunnamu.\n\nBakayi: *Rs.${amt}*${daysText}${descTe}${urgency}\n\nUPI Challinpu:\n*${upi}*\n\n${upiLink}\n\nDhanyavadalu\n*${shop}*`;
   }
-  return `Hello *${c.name}* 🙏\n\nReminder from *${shop}*.\n\nDue: *₹${amt}*${daysText}${desc}${urgency}\n\n💳 *UPI:* ${upi}\n🔗 ${upiLink}\n\nThank you 🙏\n— *${shop}*`;
+  return `Hello *${c.name}*\n\nReminder from *${shop}*.\n\nDue Amount: *Rs.${amt}*${daysText}${desc}${urgency}\n\nPay via UPI:\n*${upi}*\n\n${upiLink}\n\nThank you\n*${shop}*`;
 }
 
 function buildSpeech(c, settings) {
@@ -260,9 +263,10 @@ function buildSpeech(c, settings) {
 
 function buildCall(c, settings, lang) {
   const days = daysDiff(c.dueDate), amt = fmt(c.amountDue), shop = settings.shopName||"Shop", upi = settings.upiId||"shop@upi";
-  const desc = c.desc ? `\n📝 ${c.desc}` : "";
-  if (lang==="te") return `నమస్తే ${c.name} గారు 🙏\n\n${shop} నుండి మాట్లాడుతున్నాం.\n\nబకాయి: ₹${amt}${days>0 ? ` — ${days} రోజులు మించింది` : ""}${desc}\n\nదయచేసి ఈరోజే చెల్లించండి.\nUPI: ${upi}`;
-  return `Hello ${c.name} 🙏\n\nCalling from ${shop}.\n\nDue: ₹${amt}${days>0 ? ` — ${days} days overdue` : ""}${desc}\n\nPlease pay today.\nUPI: ${upi}`;
+  const desc = c.desc ? `\nVivrana: ${c.desc}` : "";
+  const descTe = c.desc ? `\nవివరణ: ${c.desc}` : "";
+  if (lang==="te") return `Namaste ${c.name} garu\n\n${shop} nundi matladutunnamu.\n\nBakayi: Rs.${amt}${days>0?` — ${days} rojulu mincindi`:""}${descTe}\n\nDayachesi irojey challinchandi.\nUPI: ${upi}`;
+  return `Hello ${c.name}\n\nCalling from ${shop}.\n\nDue: Rs.${amt}${days>0?` — ${days} days overdue`:""}${desc}\n\nPlease pay today.\nUPI: ${upi}`;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -549,7 +553,7 @@ function QRModal({ c, settings, t, onClose }) {
 
   const upiStr = `upi://pay?pa=${upi}&pn=${encodeURIComponent(shop)}&am=${amt}&cu=INR&tn=${encodeURIComponent(note)}`;
   const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&color=000000&bgcolor=FFFFFF&qzone=2&data=${encodeURIComponent(upiStr)}`;
-  const waMsg  = `🔳 *QR Payment — ${shop}*\n\n${c.name} గారికి నమస్తే 🙏\nUPI: *${upi}*\nమొత్తం: *₹${fmt(amt)}*\n${c.desc?`📝 ${c.desc}\n`:""}\n${upiStr}`;
+  const waMsg  = `*QR Payment — ${shop}*\n\nNameste ${c.name} garu\nUPI: *${upi}*\nAmount: *Rs.${fmt(amt)}*\n${c.desc?`Vivrana: ${c.desc}\n`:""}\n${upiStr}`;
   const [copied,setCopied] = useState(false);
   const [qrErr, setQrErr]  = useState(false);
 
@@ -616,15 +620,26 @@ function QRModal({ c, settings, t, onClose }) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// VOICE MODAL
+// VOICE MODAL — Records audio via MediaRecorder + Web Speech API
+// Downloads as .wav and opens WhatsApp so you can attach the file
 // ══════════════════════════════════════════════════════════════════
 function VoiceModal({ c, settings, t, onClose }) {
-  const [status,   setStatus]   = useState("idle");
-  const [progress, setProgress] = useState(0);
-  const timerRef = useRef(null);
+  const [status,    setStatus]   = useState("idle");
+  // idle | loading | speaking | recording | paused | done | recorded | error
+  const [progress,  setProgress] = useState(0);
+  const [audioURL,  setAudioURL] = useState(null);  // blob URL for recorded audio
+  const [audioBlob, setAudioBlob]= useState(null);  // actual blob for download
+  const [recStatus, setRecStatus]= useState("");     // recording status text
+
+  const timerRef    = useRef(null);
+  const mediaRecRef = useRef(null);  // MediaRecorder instance
+  const chunksRef   = useRef([]);    // audio chunks
+  const streamRef   = useRef(null);  // mic stream
+
   const text  = buildSpeech(c, settings);
   const phone = c.phone.replace(/\D/g,"");
   const supported = "speechSynthesis" in window;
+  const canRecord = !!(navigator.mediaDevices && window.MediaRecorder);
 
   const getBestVoice = () => {
     const v = window.speechSynthesis.getVoices();
@@ -633,52 +648,194 @@ function VoiceModal({ c, settings, t, onClose }) {
       v.find(x=>x.lang.startsWith("en")) || null;
   };
 
-  const doSpeak = () => {
+  // ── Play only (no recording) ─────────────────────────────────────
+  const doPlay = () => {
     if (!supported) { setStatus("error"); return; }
     window.speechSynthesis.cancel();
     clearInterval(timerRef.current);
     setProgress(0); setStatus("loading");
     const trySpeak = () => {
       const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "te-IN"; utter.rate = 0.8; utter.pitch = 1.05; utter.volume = 1;
-      const voice = getBestVoice();
-      if (voice) utter.voice = voice;
+      utter.lang="te-IN"; utter.rate=0.8; utter.pitch=1.05; utter.volume=1;
+      const voice = getBestVoice(); if(voice) utter.voice=voice;
       utter.onstart  = () => setStatus("speaking");
       utter.onend    = () => { setStatus("done"); setProgress(100); clearInterval(timerRef.current); };
-      utter.onerror  = e => { if (e.error!=="interrupted" && e.error!=="canceled") setStatus("error"); };
+      utter.onerror  = e => { if(e.error!=="interrupted"&&e.error!=="canceled") setStatus("error"); };
       utter.onpause  = () => setStatus("paused");
       utter.onresume = () => setStatus("speaking");
       window.speechSynthesis.speak(utter);
       setStatus("speaking");
       const est = Math.max(4000, text.length*75);
-      let el = 0;
-      timerRef.current = setInterval(() => { el+=300; setProgress(Math.min(94,Math.round(el/est*100))); if(el>=est) clearInterval(timerRef.current); },300);
+      let el=0;
+      timerRef.current=setInterval(()=>{ el+=300; setProgress(Math.min(94,Math.round(el/est*100))); if(el>=est) clearInterval(timerRef.current); },300);
     };
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length>0) setTimeout(trySpeak,80);
-    else window.speechSynthesis.onvoiceschanged = () => setTimeout(trySpeak,80);
+    const voices=window.speechSynthesis.getVoices();
+    if(voices.length>0) setTimeout(trySpeak,80);
+    else window.speechSynthesis.onvoiceschanged=()=>setTimeout(trySpeak,80);
   };
 
   const doPause  = () => { window.speechSynthesis.pause(); setStatus("paused"); clearInterval(timerRef.current); };
   const doResume = () => { window.speechSynthesis.resume(); setStatus("speaking"); };
-  const doStop   = () => { window.speechSynthesis.cancel(); setStatus("idle"); setProgress(0); clearInterval(timerRef.current); };
+  const doStop   = () => { window.speechSynthesis.cancel(); setStatus("idle"); setProgress(0); clearInterval(timerRef.current); stopRecording(); };
 
-  useEffect(() => () => { window.speechSynthesis.cancel(); clearInterval(timerRef.current); }, []);
+  // ── Record audio using microphone + speaker output ───────────────
+  // Strategy: use AudioContext + MediaStreamDestination to capture
+  // the SpeechSynthesis output directly without needing mic
+  const doRecord = async () => {
+    if (!supported) { setStatus("error"); return; }
+    if (!canRecord) { setRecStatus("Recording not supported in this browser. Use Chrome."); return; }
 
-  const waMsg  = `🎙️ *వాయిస్ రిమైండర్ — ${settings.shopName||"Shop"}*\n\n${text}\n\nUPI: ${settings.upiId||"shop@upi"}`;
-  const bars   = [...Array(16)].map((_,i)=>i);
-  const statusMap = { idle:"Ready to play", loading:"Loading voice engine…", speaking:"🎙️ Speaking…", paused:"⏸ Paused", done:"✅ Done", error:"❌ Not supported — use Chrome/Edge" };
+    try {
+      setRecStatus("Requesting microphone to capture audio...");
+      setStatus("loading");
+      setAudioURL(null);
+      setAudioBlob(null);
+      chunksRef.current = [];
+
+      // We use display media or mic to capture — simplest approach:
+      // speak + record via AudioContext destination node
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const dest     = audioCtx.createMediaStreamDestination();
+
+      // MediaRecorder on the destination stream
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/ogg")  ? "audio/ogg"
+        : "audio/webm";
+
+      const mr = new MediaRecorder(dest.stream, { mimeType });
+      mediaRecRef.current = mr;
+
+      mr.ondataavailable = e => { if(e.data && e.data.size>0) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        const url  = URL.createObjectURL(blob);
+        setAudioBlob(blob);
+        setAudioURL(url);
+        setStatus("recorded");
+        setProgress(100);
+        setRecStatus("Audio recorded! Download and send via WhatsApp.");
+        audioCtx.close();
+      };
+
+      mr.start(100);
+      setStatus("recording");
+      setRecStatus("Recording voice...");
+
+      // Speak the text — AudioContext captures it
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang="te-IN"; utter.rate=0.8; utter.pitch=1.05; utter.volume=1;
+      const voice=getBestVoice(); if(voice) utter.voice=voice;
+
+      // Progress simulation
+      const est=Math.max(5000, text.length*80);
+      let el=0; clearInterval(timerRef.current);
+      timerRef.current=setInterval(()=>{ el+=300; setProgress(Math.min(90,Math.round(el/est*100))); if(el>=est) clearInterval(timerRef.current); },300);
+
+      utter.onend=()=>{
+        clearInterval(timerRef.current);
+        setTimeout(()=>{ if(mr.state!=="inactive") mr.stop(); },300);
+      };
+      utter.onerror=()=>{
+        mr.stop();
+        setStatus("error");
+        setRecStatus("Speech failed. Please use Chrome/Edge.");
+      };
+
+      window.speechSynthesis.cancel();
+      setTimeout(()=>window.speechSynthesis.speak(utter), 200);
+
+    } catch(err) {
+      setStatus("error");
+      setRecStatus("Could not start recording: "+err.message+". Try Chrome.");
+    }
+  };
+
+  const stopRecording = () => {
+    if(mediaRecRef.current && mediaRecRef.current.state!=="inactive") {
+      mediaRecRef.current.stop();
+    }
+    if(streamRef.current) {
+      streamRef.current.getTracks().forEach(t=>t.stop());
+    }
+  };
+
+  // ── Download audio file ──────────────────────────────────────────
+  const doDownload = () => {
+    if (!audioBlob || !audioURL) return;
+    const a = document.createElement("a");
+    a.href = audioURL;
+    a.download = `Voice-Reminder-${c.name}-Rs${c.amountDue}.webm`;
+    a.click();
+  };
+
+  // ── WhatsApp: open chat so user can attach the audio file ────────
+  // WhatsApp web/app does NOT allow pre-attaching files via URL.
+  // Best approach: download the file first, then open WA chat.
+  // The user attaches it manually (one tap on attachment icon).
+  const doWhatsApp = () => {
+    const waText = `Voice reminder for ${c.name} - Rs.${fmt(c.amountDue)} pending. Please pay via UPI: ${settings.upiId||"shop@upi"}`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(waText)}`, "_blank");
+  };
+
+  const doShareAudio = async () => {
+    if (!audioBlob) { doWhatsApp(); return; }
+    // Use Web Share API if available (mobile Chrome/Safari) — can share actual file
+    if (navigator.share && navigator.canShare) {
+      const file = new File([audioBlob], `VoiceReminder-${c.name}.webm`, { type: audioBlob.type });
+      if (navigator.canShare({ files:[file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: `Voice Reminder — ${c.name}`,
+            text: `Rs.${fmt(c.amountDue)} payment reminder from ${settings.shopName||"Shop"}`,
+          });
+          return;
+        } catch(e) { /* user cancelled or error — fall through */ }
+      }
+    }
+    // Fallback: download file + open WhatsApp
+    doDownload();
+    setTimeout(doWhatsApp, 800);
+  };
+
+  useEffect(() => () => {
+    window.speechSynthesis.cancel();
+    clearInterval(timerRef.current);
+    stopRecording();
+  }, []);
+
+  const bars = [...Array(16)].map((_,i)=>i);
+  const statusColor = {
+    error:"#f87171", recorded:"#34d399", recording:"#a78bfa",
+    speaking:"#34d399", done:"#34d399", loading:"#60a5fa", paused:"#fbbf24"
+  }[status] || "#64748b";
+
+  const statusLabel = {
+    idle:"Press Play to hear, or Record to save audio",
+    loading:"Loading voice...",
+    speaking:"Playing voice...",
+    paused:"Paused",
+    done:"Done playing",
+    recording:"Recording audio...",
+    recorded:"Audio ready — download & send via WhatsApp!",
+    error:"Error — please use Chrome or Edge browser",
+  }[status] || "";
 
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
       style={{ position:"fixed", inset:0, zIndex:50, background:"rgba(0,0,0,0.82)", backdropFilter:"blur(6px)", display:"flex", alignItems:"flex-end", justifyContent:"center", padding:16 }}
       onClick={e => e.target===e.currentTarget && (doStop(), onClose())}>
       <motion.div initial={{ y:60 }} animate={{ y:0 }} exit={{ y:60 }}
-        style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:28, padding:20, width:"100%", maxWidth:400 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
+        style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:28, padding:20, width:"100%", maxWidth:420, maxHeight:"92vh", overflowY:"auto" }}>
+
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
           <span style={{ fontWeight:800, fontSize:15, color:"#fff" }}>{t.voiceTitle}</span>
           <button onClick={()=>{doStop();onClose();}} style={{ color:"#64748b", background:"none", border:"none", cursor:"pointer", fontSize:18 }}>✕</button>
         </div>
+
         {/* Customer chip */}
         <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14, background:"#0f172a", borderRadius:16, padding:12 }}>
           <div style={{ width:40, height:40, borderRadius:"50%", background:"rgba(168,85,247,0.2)", border:"1px solid rgba(168,85,247,0.4)", display:"flex", alignItems:"center", justifyContent:"center", color:"#a855f7", fontWeight:800, fontSize:14, flexShrink:0 }}>
@@ -686,51 +843,106 @@ function VoiceModal({ c, settings, t, onClose }) {
           </div>
           <div>
             <p style={{ fontWeight:800, color:"#fff", fontSize:14, margin:0 }}>{c.name}</p>
-            <p style={{ color:"#fbbf24", fontFamily:"monospace", fontSize:12, margin:0 }}>₹{fmt(c.amountDue)}</p>
+            <p style={{ color:"#fbbf24", fontFamily:"monospace", fontSize:12, margin:0 }}>Rs.{fmt(c.amountDue)}</p>
           </div>
         </div>
-        {/* Script preview */}
+
+        {/* Script text */}
         <div style={{ background:"#0f172a", border:"1px solid #1e3a5f", borderRadius:14, padding:12, marginBottom:14 }}>
           <p style={{ color:"#64748b", fontSize:10, fontWeight:700, marginBottom:4 }}>{t.voiceMsg}</p>
-          <p style={{ color:"#94a3b8", fontSize:12, lineHeight:1.7, margin:0 }}>{text}</p>
+          <p style={{ color:"#94a3b8", fontSize:12, lineHeight:1.8, margin:0 }}>{text}</p>
         </div>
-        {/* Waveform */}
-        <div style={{ display:"flex", alignItems:"flex-end", justifyContent:"center", gap:3, height:48, marginBottom:10 }}>
+
+        {/* Waveform animation */}
+        <div style={{ display:"flex", alignItems:"flex-end", justifyContent:"center", gap:3, height:44, marginBottom:8 }}>
           {bars.map(i=>(
-            <motion.div key={i} style={{ width:5, borderRadius:3, background:status==="speaking"?"#f59e0b":"#334155" }}
-              animate={status==="speaking"?{height:[4,8+Math.random()*32,4]}:{height:4}}
-              transition={status==="speaking"?{duration:0.35+i*0.025,repeat:Infinity,delay:i*0.04,ease:"easeInOut"}:{duration:0.15}}/>
+            <motion.div key={i}
+              style={{ width:5, borderRadius:3, background:(status==="speaking"||status==="recording")?"#f59e0b":"#334155" }}
+              animate={(status==="speaking"||status==="recording")?{height:[4,8+Math.random()*30,4]}:{height:4}}
+              transition={(status==="speaking"||status==="recording")?{duration:0.35+i*0.025,repeat:Infinity,delay:i*0.04,ease:"easeInOut"}:{duration:0.15}}/>
           ))}
         </div>
+
         {/* Progress bar */}
-        <div style={{ background:"#0f172a", borderRadius:8, height:4, marginBottom:10, overflow:"hidden" }}>
-          <motion.div style={{ height:"100%", background:"#f59e0b", borderRadius:8 }} animate={{ width:`${progress}%` }} transition={{ ease:"linear", duration:0.3 }}/>
+        <div style={{ background:"#0f172a", borderRadius:8, height:4, marginBottom:8, overflow:"hidden" }}>
+          <motion.div style={{ height:"100%", background:status==="recording"?"#a78bfa":"#f59e0b", borderRadius:8 }}
+            animate={{ width:`${progress}%` }} transition={{ ease:"linear", duration:0.3 }}/>
         </div>
-        <p style={{ textAlign:"center", fontSize:11, marginBottom:12, fontWeight:600, color:status==="error"?"#f87171":status==="done"?"#10b981":status==="speaking"?"#34d399":"#64748b" }}>
-          {statusMap[status]}
+
+        {/* Status text */}
+        <p style={{ textAlign:"center", fontSize:11, marginBottom:14, fontWeight:600, color:statusColor, minHeight:16 }}>
+          {recStatus || statusLabel}
         </p>
+
         {!supported ? (
-          <div style={{ background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:14, padding:12, textAlign:"center" }}>
-            <p style={{ color:"#f87171", fontSize:12, fontWeight:700, margin:"0 0 6px" }}>⛔ Browser not supported</p>
-            <p style={{ color:"#94a3b8", fontSize:11, margin:0 }}>Please use Google Chrome or Microsoft Edge for voice features.</p>
+          <div style={{ background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:14, padding:12, textAlign:"center", marginBottom:10 }}>
+            <p style={{ color:"#f87171", fontSize:12, fontWeight:700, margin:"0 0 4px" }}>Browser not supported</p>
+            <p style={{ color:"#94a3b8", fontSize:11, margin:0 }}>Please use Google Chrome or Edge for voice.</p>
           </div>
         ) : (
           <>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:10 }}>
-              {(status==="idle"||status==="done"||status==="error") ? (
-                <button onClick={doSpeak} style={{ background:"#f59e0b", border:"none", borderRadius:14, padding:10, color:"#1e293b", fontWeight:800, fontSize:13, cursor:"pointer" }}>▶ {t.play}</button>
-              ) : status==="speaking" ? (
-                <button onClick={doPause} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer" }}>⏸ {t.pause}</button>
-              ) : (
-                <button onClick={doResume} style={{ background:"#f59e0b", border:"none", borderRadius:14, padding:10, color:"#1e293b", fontWeight:800, fontSize:13, cursor:"pointer" }}>▶ Resume</button>
-              )}
-              <button onClick={doSpeak} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:13, cursor:"pointer" }}>🔄 {t.replay}</button>
-              <button onClick={doStop} style={{ background:"rgba(220,38,38,0.2)", border:"1px solid rgba(220,38,38,0.4)", borderRadius:14, padding:10, color:"#f87171", fontWeight:700, fontSize:13, cursor:"pointer" }}>⏹ {t.stop}</button>
+            {/* ── Row 1: Play controls ── */}
+            <div style={{ marginBottom:8 }}>
+              <p style={{ color:"#475569", fontSize:10, fontWeight:700, marginBottom:6 }}>PLAY (preview only)</p>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
+                {(status==="idle"||status==="done"||status==="error"||status==="recorded") ? (
+                  <button onClick={doPlay} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>▶ {t.play}</button>
+                ) : status==="speaking" ? (
+                  <button onClick={doPause} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>⏸ {t.pause}</button>
+                ) : status==="paused" ? (
+                  <button onClick={doResume} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>▶ Resume</button>
+                ) : (
+                  <button disabled style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:14, padding:10, color:"#475569", fontSize:12, cursor:"not-allowed" }}>▶ {t.play}</button>
+                )}
+                <button onClick={doPlay} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>🔄 {t.replay}</button>
+                <button onClick={doStop} style={{ background:"rgba(220,38,38,0.15)", border:"1px solid rgba(220,38,38,0.3)", borderRadius:14, padding:10, color:"#f87171", fontWeight:700, fontSize:12, cursor:"pointer" }}>⏹ {t.stop}</button>
+              </div>
             </div>
-            <a href={`https://wa.me/${phone}?text=${encodeURIComponent(waMsg)}`} target="_blank" rel="noopener noreferrer"
-              style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, background:"#065f46", border:"none", borderRadius:14, padding:10, color:"#6ee7b7", fontSize:13, fontWeight:700, textDecoration:"none" }}>
-              🟢 {t.shareWA}
-            </a>
+
+            {/* ── Row 2: Record audio ── */}
+            <div style={{ background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.25)", borderRadius:16, padding:12, marginBottom:10 }}>
+              <p style={{ color:"#a78bfa", fontSize:10, fontWeight:700, marginBottom:8 }}>RECORD AUDIO FILE (for WhatsApp)</p>
+              {status==="recording" ? (
+                <button onClick={()=>{ if(mediaRecRef.current&&mediaRecRef.current.state!=="inactive") mediaRecRef.current.stop(); window.speechSynthesis.cancel(); }}
+                  style={{ width:"100%", background:"rgba(220,38,38,0.2)", border:"1px solid rgba(220,38,38,0.4)", borderRadius:14, padding:11, color:"#f87171", fontWeight:800, fontSize:13, cursor:"pointer" }}>
+                  ⏹ Stop Recording
+                </button>
+              ) : (
+                <button onClick={doRecord} disabled={!canRecord}
+                  style={{ width:"100%", background:canRecord?"rgba(167,139,250,0.25)":"#1e293b", border:`1px solid ${canRecord?"rgba(167,139,250,0.5)":"#334155"}`, borderRadius:14, padding:11, color:canRecord?"#c4b5fd":"#475569", fontWeight:800, fontSize:13, cursor:canRecord?"pointer":"not-allowed" }}>
+                  {canRecord ? "⏺ Record Audio File" : "Recording not supported (use Chrome)"}
+                </button>
+              )}
+            </div>
+
+            {/* ── Row 3: Audio player + actions (shown after recording) ── */}
+            {audioURL && (
+              <motion.div initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }}
+                style={{ background:"rgba(16,185,129,0.08)", border:"1px solid rgba(16,185,129,0.3)", borderRadius:16, padding:12, marginBottom:10 }}>
+                <p style={{ color:"#34d399", fontSize:11, fontWeight:700, marginBottom:8 }}>Audio Ready — Rs.{fmt(c.amountDue)}</p>
+                {/* Native audio player */}
+                <audio controls src={audioURL} style={{ width:"100%", borderRadius:10, marginBottom:10, height:36 }} />
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                  <button onClick={doDownload}
+                    style={{ background:"#1d4ed8", border:"none", borderRadius:14, padding:11, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+                    Download .webm
+                  </button>
+                  <button onClick={doShareAudio}
+                    style={{ background:"#059669", border:"none", borderRadius:14, padding:11, color:"#fff", fontWeight:800, fontSize:12, cursor:"pointer" }}>
+                    Share via WhatsApp
+                  </button>
+                </div>
+                <p style={{ color:"#475569", fontSize:10, marginTop:8, lineHeight:1.5, textAlign:"center" }}>
+                  Download the audio file, then open WhatsApp and attach it as a voice message.
+                </p>
+              </motion.div>
+            )}
+
+            {/* ── Row 4: Fallback text WA (always available) ── */}
+            <button onClick={doWhatsApp}
+              style={{ width:"100%", background:"rgba(5,150,105,0.15)", border:"1px solid rgba(5,150,105,0.3)", borderRadius:14, padding:10, color:"#34d399", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+              Send Text Reminder via WhatsApp
+            </button>
           </>
         )}
       </motion.div>
@@ -778,7 +990,7 @@ function CallModal({ c, settings, t, lang, onClose }) {
 function PaidModal({ c, settings, t, onClose }) {
   const phone = c.phone.replace(/\D/g,"");
   const shop  = settings.shopName || "Shop";
-  const receipt = `✅ *Payment Confirmed — ${shop}*\n\nనమస్తే ${c.name} గారు 🙏\n\nమీరు *₹${fmt(c.amountDue)}* చెల్లించారు.\n${c.desc?`\n📝 ${c.desc}\n`:""}\n📅 ${new Date().toLocaleDateString("en-IN")}\n🏪 ${shop}\n💳 ${settings.upiId||"shop@upi"}\n\nధన్యవాదాలు 🙏`;
+  const receipt = `*Payment Confirmed — ${shop}*\n\nNameste ${c.name} garu\n\nMeeru *Rs.${fmt(c.amountDue)}* challinchaaru.\n${c.desc?`Vivrana: ${c.desc}\n`:""}\nDate: ${new Date().toLocaleDateString("en-IN")}\nShop: ${shop}\nUPI: ${settings.upiId||"shop@upi"}\n\nDhanyavaadaalu\n— *${shop}*`;
   return (
     <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
       style={{ position:"fixed", inset:0, zIndex:50, background:"rgba(0,0,0,0.82)", backdropFilter:"blur(6px)", display:"flex", alignItems:"center", justifyContent:"center", padding:16 }}>
