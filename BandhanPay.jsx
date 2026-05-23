@@ -220,17 +220,35 @@ const ldLS      = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) |
 const svLS      = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
 // ── API ───────────────────────────────────────────────────────────
+// ALL requests use GET with URL params — avoids CORS preflight
+// that blocks browser→Apps Script POST requests
 async function apiGet(url, action = "all") {
-  const res  = await fetch(`${url}?action=${action}`, { method: "GET" });
-  const json = await res.json();
-  if (!json.ok) throw new Error(json.error || "API error");
-  return json;
+  const fullUrl = `${url}?action=${encodeURIComponent(action)}&t=${Date.now()}`;
+  const res  = await fetch(fullUrl, { method:"GET", redirect:"follow" });
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text);
+    if (!json.ok) throw new Error(json.error || "API error");
+    return json;
+  } catch(e) {
+    throw new Error("Bad response from server. Check your Script URL.");
+  }
 }
-async function apiPost(url, body) {
-  const res  = await fetch(url, { method: "POST", body: JSON.stringify(body) });
-  const json = await res.json();
-  if (!json.ok) throw new Error(json.error || "API error");
-  return json;
+
+// Write operations also use GET with ?action=X&data=JSON
+// This bypasses CORS preflight completely
+async function apiWrite(url, action, data) {
+  const dataStr  = encodeURIComponent(JSON.stringify(data));
+  const fullUrl  = `${url}?action=${encodeURIComponent(action)}&data=${dataStr}&t=${Date.now()}`;
+  const res  = await fetch(fullUrl, { method:"GET", redirect:"follow" });
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text);
+    if (!json.ok) throw new Error(json.error || "API error");
+    return json;
+  } catch(e) {
+    throw new Error("Write failed. Check Script URL and permissions.");
+  }
 }
 
 // ── Message builders ──────────────────────────────────────────────
@@ -1104,10 +1122,11 @@ function CustCard({ c, t, settings, lang, onEdit, onDel, onMarkPaid, onUndoPaid,
 // SETTINGS PAGE — with full validation
 // ══════════════════════════════════════════════════════════════════
 function SettingsPage({ settings, scriptUrl, onSave, t, lang, onLangChange }) {
-  const [f, setF]     = useState({ shopName:"", upiId:"", ownerPhone:"", scriptUrl:scriptUrl||"", ...settings });
-  const [errs, setErrs] = useState({});
+  const [f, setF]       = useState({ shopName:"", upiId:"", ownerPhone:"", scriptUrl:scriptUrl||"", ...settings });
+  const [errs, setErrs]   = useState({});
   const [touched, setTouched] = useState({});
   const [submitted, setSubmitted] = useState(false);
+  const [testStatus, setTestStatus] = useState("idle"); // idle|testing|ok|fail
 
   const validate = (fields) => {
     const { errors } = validateSettings(fields, t);
@@ -1117,7 +1136,6 @@ function SettingsPage({ settings, scriptUrl, onSave, t, lang, onLangChange }) {
 
   const handleChange = (k) => (e) => {
     const val = e.target.value;
-    // Block letters in phone field
     if (k === "ownerPhone" && /[a-zA-Z]/.test(val.slice(-1))) {
       setErrs(p => ({ ...p, ownerPhone: t.err_phoneLetters }));
       setF(p => ({ ...p, [k]: val.replace(/[a-zA-Z]/g,"") }));
@@ -1140,34 +1158,84 @@ function SettingsPage({ settings, scriptUrl, onSave, t, lang, onLangChange }) {
     if (ok) onSave(f);
   };
 
+  // Test the Script URL connection
+  const testConnection = async () => {
+    const url = f.scriptUrl || "";
+    if (!url || url.includes("YOUR_DEPLOYMENT_ID")) {
+      setTestStatus("fail");
+      return;
+    }
+    setTestStatus("testing");
+    try {
+      const res  = await fetch(`${url}?action=ping&t=${Date.now()}`, { method:"GET", redirect:"follow" });
+      const text = await res.text();
+      const json = JSON.parse(text);
+      if (json.ok) setTestStatus("ok");
+      else { setTestStatus("fail"); }
+    } catch(e) {
+      setTestStatus("fail");
+    }
+    setTimeout(() => setTestStatus("idle"), 5000);
+  };
+
   const inp = (k) => ({ ...INP(!!(errs[k] && (touched[k]||submitted))) });
 
+  const testColors = { idle:"#475569", testing:"#60a5fa", ok:"#34d399", fail:"#f87171" };
+  const testLabels = { idle:"Test Connection", testing:"Testing...", ok:"Connected!", fail:"Connection Failed" };
+
   const deployOptions = [
-    { name:"Render.com",  e:"🟢", desc:"BEST free alt — static + Node.js, GitHub deploy in 2 min.", url:"https://render.com" },
-    { name:"Railway.app", e:"🚂", desc:"$5/mo free credit. Node + SQLite + persistent disk.", url:"https://railway.app" },
-    { name:"Fly.io",      e:"🪁", desc:"3 free VMs + persistent volumes. Node + SQLite perfect.", url:"https://fly.io" },
-    { name:"Vercel",      e:"▲",  desc:"Best for React frontend only.", url:"https://vercel.com" },
-    { name:"Netlify",     e:"🌐", desc:"Great for static frontend. 300 free build mins/month.", url:"https://netlify.com" },
+    { name:"Render.com",  e:"🟢", desc:"BEST free option — static sites + free tier, GitHub auto deploy.", url:"https://render.com" },
+    { name:"Railway.app", e:"🚂", desc:"$5/mo free credit. Node.js + persistent disk. Ideal for this app.", url:"https://railway.app" },
+    { name:"Fly.io",      e:"🪁", desc:"3 free VMs + persistent volumes. Full Node.js support.", url:"https://fly.io" },
+    { name:"Vercel",      e:"▲",  desc:"Best for React frontend only. Zero config.", url:"https://vercel.com" },
+    { name:"Netlify",     e:"🌐", desc:"Good for static frontend. 300 free build mins/month.", url:"https://netlify.com" },
   ];
 
   return (
     <div style={{ padding:16, maxWidth:480, margin:"0 auto", paddingBottom:40 }}>
       <p style={{ fontWeight:800, fontSize:18, color:"#fff", marginBottom:16 }}>{t.settings}</p>
 
-      {/* Google Sheets */}
+      {/* Google Sheets Connection */}
       <div style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:20, padding:18, marginBottom:16 }}>
         <p style={{ color:"#fbbf24", fontWeight:800, fontSize:12, marginBottom:14 }}>☁️ Google Sheets Connection</p>
-        <div style={{ marginBottom:4 }}>
+
+        {/* How-to steps */}
+        <div style={{ background:"#0f172a", border:"1px solid #1e3a5f", borderRadius:14, padding:12, marginBottom:14 }}>
+          <p style={{ color:"#60a5fa", fontWeight:800, fontSize:11, marginBottom:8 }}>How to get your Script URL:</p>
+          {[
+            "Go to script.google.com",
+            "Paste Code.gs → Run setup()",
+            "Deploy → New Deployment → Web App",
+            "Execute as: Me | Access: Anyone",
+            "Copy the URL and paste below",
+          ].map((step,i) => (
+            <p key={i} style={{ color:"#64748b", fontSize:11, margin:"0 0 4px", display:"flex", gap:6 }}>
+              <span style={{ color:"#f59e0b", fontWeight:800, flexShrink:0 }}>{i+1}.</span>{step}
+            </p>
+          ))}
+        </div>
+
+        <div style={{ marginBottom:10 }}>
           <p style={{ color: errs.scriptUrl&&(touched.scriptUrl||submitted) ? "#f87171" : "#94a3b8", fontSize:11, fontWeight:700, marginBottom:5 }}>
-            {t.scriptUrl}
+            {t.scriptUrl} <span style={{ color:"#ef4444" }}>*</span>
           </p>
           <input value={f.scriptUrl||""} onChange={handleChange("scriptUrl")} onBlur={handleBlur("scriptUrl")}
-            placeholder="https://script.google.com/macros/s/…/exec" style={inp("scriptUrl")} />
+            placeholder="https://script.google.com/macros/s/…/exec"
+            style={{ ...inp("scriptUrl"), marginBottom:6 }} />
           <AnimatePresence>
             {errs.scriptUrl && (touched.scriptUrl||submitted) && <FieldError msg={errs.scriptUrl} />}
           </AnimatePresence>
-          <p style={{ color:"#475569", fontSize:10, marginTop:4 }}>Paste your deployed Apps Script URL here</p>
         </div>
+
+        {/* Test connection button */}
+        <button onClick={testConnection} disabled={testStatus==="testing"}
+          style={{ width:"100%", background:"rgba(96,165,250,0.1)", border:`1px solid ${testColors[testStatus]}40`, borderRadius:14,
+            padding:10, color:testColors[testStatus], fontWeight:700, fontSize:12, cursor:"pointer", transition:"all 0.2s" }}>
+          {testStatus==="testing" ? "⟳ Testing connection..." :
+           testStatus==="ok"      ? "✅ "+testLabels.ok+" — Google Sheets is connected!" :
+           testStatus==="fail"    ? "❌ "+testLabels.fail+" — Check URL & permissions" :
+           "🔗 "+testLabels.idle}
+        </button>
       </div>
 
       {/* Shop Details */}
@@ -1288,27 +1356,42 @@ export default function BandhanPay() {
 
   const t = T[lang];
 
-  // ── Bootstrap: load from Google Sheets ────────────────────────
+  // ── Bootstrap: load from Google Sheets on mount ──────────────
   useEffect(() => {
     const url = ldLS("bp_script_url", DEFAULT_SCRIPT_URL);
-    if (!url || url.includes("YOUR_DEPLOYMENT_ID")) { setLoadState("ready"); return; }
+    if (!url || url.includes("YOUR_DEPLOYMENT_ID")) {
+      // No script URL — load from cache
+      setCust(ldLS("bp_cust_cache",[]));
+      setSettings(s => ({ ...s, ...ldLS("bp_sett_cache",{}) }));
+      setRem(ldLS("bp_rem_cache",[]));
+      setLoadState("ready");
+      return;
+    }
     setLoadState("loading");
+    setSyncStatus("syncing");
     apiGet(url, "all")
       .then(data => {
-        if (data.customers) setCust(data.customers);
-        if (data.settings)  setSettings(s => ({ ...s, ...data.settings }));
-        if (data.reminders) setRem(data.reminders);
+        if (data.customers && Array.isArray(data.customers)) setCust(data.customers);
+        if (data.settings  && typeof data.settings==="object") setSettings(s => ({ ...s, ...data.settings }));
+        if (data.reminders && Array.isArray(data.reminders))  setRem(data.reminders);
         setLoadState("ready");
+        setSyncStatus("synced");
+        setTimeout(() => setSyncStatus("idle"), 2000);
       })
-      .catch(() => {
-        setCust(ldLS("bp_cust_cache",[]));
-        setSettings(s => ({ ...s, ...ldLS("bp_sett_cache",{}) }));
-        setRem(ldLS("bp_rem_cache",[]));
+      .catch(err => {
+        console.error("Load from Sheets failed:", err.message);
+        // Fallback to localStorage cache
+        const cached = ldLS("bp_cust_cache",[]);
+        const cachedS = ldLS("bp_sett_cache",{});
+        const cachedR = ldLS("bp_rem_cache",[]);
+        if (cached.length) setCust(cached);
+        if (Object.keys(cachedS).length) setSettings(s => ({ ...s, ...cachedS }));
+        if (cachedR.length) setRem(cachedR);
         setLoadState("ready");
         setSyncStatus("error");
-        addToast("⚠️ Could not load from Google Drive — showing cached data", "warn");
+        setTimeout(() => setSyncStatus("idle"), 5000);
       });
-  }, []);
+  }, []); // eslint-disable-line
 
   // ── Cache to localStorage ──────────────────────────────────────
   useEffect(() => { svLS("bp_cust_cache", customers); }, [customers]);
@@ -1325,18 +1408,20 @@ export default function BandhanPay() {
 
   const close = () => setModal(null);
 
-  // ── Sync helper ────────────────────────────────────────────────
-  const sync = async (action, body) => {
+  // ── Sync helper — uses GET+params to bypass CORS ──────────────
+  const sync = async (action, data) => {
     const url = ldLS("bp_script_url", DEFAULT_SCRIPT_URL);
     if (!url || url.includes("YOUR_DEPLOYMENT_ID")) return;
     setSyncStatus("syncing");
     try {
-      await apiPost(url, { action, ...body });
+      await apiWrite(url, action, data);
       setSyncStatus("synced");
       setTimeout(() => setSyncStatus("idle"), 2500);
-    } catch {
+    } catch(err) {
+      console.error("Sync failed:", action, err.message);
       setSyncStatus("error");
-      setTimeout(() => setSyncStatus("idle"), 3000);
+      addToast("⚠️ Sync failed: " + err.message, "error");
+      setTimeout(() => setSyncStatus("idle"), 4000);
     }
   };
 
@@ -1346,72 +1431,81 @@ export default function BandhanPay() {
     if (isEdit) {
       const updated = { ...modal.data, ...form, amountDue: Number(form.amountDue) };
       setCust(cs => cs.map(c => c.id===isEdit ? updated : c));
-      await sync("update_customer", { customer: updated });
+      close();
+      addToast(t.t_saved);
+      await sync("update_customer", updated);
     } else {
       const newC = { ...form, id: String(Date.now()), amountDue: Number(form.amountDue), paid:false, reminderCount:0, paidAt:"", createdAt:new Date().toISOString() };
       setCust(cs => [...cs, newC]);
-      await sync("save_customer", { customer: newC });
+      close();
+      addToast(t.t_saved);
+      await sync("save_customer", newC);
     }
-    close();
-    addToast(t.t_saved);
   };
 
   const delCust = async (id) => {
     setCust(cs => cs.filter(c => c.id!==id));
-    await sync("delete_customer", { id });
     close();
     addToast(t.t_del, "warn");
+    await sync("delete_customer", { id });
   };
 
   const markPaid = async (id) => {
     const paidAt = new Date().toISOString();
     setCust(cs => cs.map(c => c.id===id ? { ...c, paid:true, paidAt } : c));
-    await sync("mark_paid", { id, paidAt });
     const c = customers.find(x => x.id===id);
     if (c) setModal({ type:"paid", data: { ...c, paid:true, paidAt } });
     addToast(t.t_paid);
+    await sync("mark_paid", { id, paidAt });
   };
 
   const undoPaid = async (id) => {
     setCust(cs => cs.map(c => c.id===id ? { ...c, paid:false, paidAt:"" } : c));
-    await sync("undo_paid", { id });
     close();
+    await sync("undo_paid", { id });
   };
 
   const sendWA = async (c) => {
     const msg   = buildWAMsg(c, settings, lang, c.reminderCount||0);
     const phone = c.phone.replace(/\D/g,"");
-    if (phone.length < 10) { addToast("⛔ Invalid phone number — cannot send WhatsApp", "error"); return; }
+    if (phone.length < 10) { addToast("Invalid phone number — cannot send WhatsApp", "error"); return; }
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, "_blank");
     const newCount = (c.reminderCount||0) + 1;
     setCust(cs => cs.map(x => x.id===c.id ? { ...x, reminderCount: newCount } : x));
+    addToast(t.t_wa);
     await sync("increment_reminder", { id: c.id });
     const rem = { name:c.name, amount:c.amountDue, type:"whatsapp", at:new Date().toISOString() };
     setRem(rs => [rem, ...rs]);
-    await sync("log_reminder", { reminder: rem });
-    addToast(t.t_wa);
+    await sync("log_reminder", rem);
   };
 
   const logRem = async (c, type) => {
     const rem = { name:c.name, amount:c.amountDue, type, at:new Date().toISOString() };
     setRem(rs => [rem, ...rs]);
-    await sync("log_reminder", { reminder: rem });
+    await sync("log_reminder", rem);
   };
 
   const saveSettingsFn = async (form) => {
     const { scriptUrl: newUrl, ...rest } = form;
     setSettings(rest);
-    if (newUrl) { setScriptUrl(newUrl); svLS("bp_script_url", newUrl); }
+    if (newUrl && newUrl !== scriptUrl) {
+      setScriptUrl(newUrl);
+      svLS("bp_script_url", newUrl);
+    }
+    addToast("✅ " + t.saveSettings);
     const url = newUrl || ldLS("bp_script_url", DEFAULT_SCRIPT_URL);
     if (url && !url.includes("YOUR_DEPLOYMENT_ID")) {
       setSyncStatus("syncing");
       try {
-        await apiPost(url, { action:"save_settings", settings: rest });
+        await apiWrite(url, "save_settings", rest);
         setSyncStatus("synced");
+        addToast("☁️ Settings synced to Google Drive!", "success");
         setTimeout(() => setSyncStatus("idle"), 2500);
-      } catch { setSyncStatus("error"); }
+      } catch(err) {
+        setSyncStatus("error");
+        addToast("⚠️ Settings save failed: " + err.message, "error");
+      }
     }
-    addToast("✅ " + t.saveSettings);
   };
 
   // ── Filtered list ──────────────────────────────────────────────
