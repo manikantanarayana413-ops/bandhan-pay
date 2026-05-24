@@ -272,14 +272,104 @@ function buildWAMsg(c, settings, lang, count) {
   return `Hello *${c.name}*\n\nReminder from *${shop}*.\n\nDue Amount: *Rs.${amt}*${daysText}${desc}${urgency}\n\nPay via UPI:\n*${upi}*\n\n${upiLink}\n\nThank you\n*${shop}*`;
 }
 
-function buildSpeech(c, settings) {
-  const days = daysDiff(c.dueDate), shop = settings.shopName||"మా షాప్", upi = settings.upiId||"UPI";
-  const daysText = days>0 ? `${days} రోజుల నుండి` : days===0 ? "ఈరోజు" : "";
-  const descText = c.desc ? `${c.desc} కోసం` : "";
-  return `నమస్తే ${c.name} గారు. ${shop} నుండి మీకు గుర్తు చేస్తున్నాం. ${descText} మీ బకాయి ${c.amountDue} రూపాయలు ${daysText} పెండింగ్‌లో ఉంది. దయచేసి ఈరోజే ${upi} ద్వారా చెల్లించండి. ధన్యవాదాలు.`;
+// ══════════════════════════════════════════════════════════════════
+// VOICE ENGINE — Telugu number-to-words + natural speech text
+// ══════════════════════════════════════════════════════════════════
+
+// Telugu number to words (for natural pronunciation)
+function teluguNumberToWords(num) {
+  const n = Math.floor(Number(num));
+  if (isNaN(n) || n < 0) return String(num);
+
+  const ones = ["","ఒకటి","రెండు","మూడు","నాలుగు","అయిదు","ఆరు","ఏడు","ఎనిమిది","తొమ్మిది",
+                "పది","పదకొండు","పన్నెండు","పదమూడు","పదనాలుగు","పదిహేను","పదహారు","పదిహేడు","పదెనిమిది","పందొమ్మిది"];
+  const tens = ["","","ఇరవై","ముప్పై","నలభై","యాభై","అరవై","డెభ్భై","ఎనభై","తొంభై"];
+
+  if (n === 0) return "సున్నా";
+  if (n < 20)  return ones[n];
+  if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? " " + ones[n%10] : "");
+  if (n < 1000) {
+    const h = Math.floor(n/100);
+    const r = n % 100;
+    return ones[h] + " వందలు" + (r ? " " + teluguNumberToWords(r) : "");
+  }
+  if (n < 100000) {
+    const t = Math.floor(n/1000);
+    const r = n % 1000;
+    return teluguNumberToWords(t) + " వేలు" + (r ? " " + teluguNumberToWords(r) : "");
+  }
+  if (n < 10000000) {
+    const l = Math.floor(n/100000);
+    const r = n % 100000;
+    return teluguNumberToWords(l) + " లక్షలు" + (r ? " " + teluguNumberToWords(r) : "");
+  }
+  return String(n); // fallback for very large numbers
 }
 
-function buildCall(c, settings, lang) {
+// Build natural Telugu speech — all numbers as Telugu words,
+// no English mixed in, short sentences with natural pauses
+function buildSpeech(c, settings) {
+  const days    = daysDiff(c.dueDate);
+  const shop    = settings.shopName || "మా షాప్";
+  const amtWord = teluguNumberToWords(c.amountDue);
+
+  // Due date phrase
+  let duePhrase = "";
+  if (days > 0)       duePhrase = `ఇది ${teluguNumberToWords(days)} రోజుల నుండి పెండింగ్‌లో ఉంది.`;
+  else if (days === 0) duePhrase = "ఈరోజే చెల్లింపు గడువు ముగుస్తుంది.";
+  else                 duePhrase = "చెల్లింపు గడువు త్వరలో వస్తుంది.";
+
+  // Description phrase (only if desc is Telugu/short)
+  const descPhrase = c.desc ? `${c.desc} కోసం ` : "";
+
+  // Build the speech — short natural sentences
+  return `నమస్తే, ${c.name} గారు. ` +
+    `${shop} నుండి మీకు గుర్తు చేస్తున్నాము. ` +
+    `${descPhrase}మీ బకాయి మొత్తం ${amtWord} రూపాయలు. ` +
+    `${duePhrase} ` +
+    `దయచేసి ఈరోజే చెల్లించండి. ` +
+    `ధన్యవాదాలు.`;
+}
+
+// Pick the absolute best available voice for Telugu
+// Priority: te-IN > te > hi-IN (Hindi is closest to Telugu phonetics) > en-IN
+function getBestVoiceForTelugu() {
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return null;
+
+  // Exact Telugu India match
+  const teIN = voices.find(v => v.lang === "te-IN");
+  if (teIN) return teIN;
+
+  // Any Telugu
+  const te = voices.find(v => v.lang.toLowerCase().startsWith("te"));
+  if (te) return te;
+
+  // Hindi India — closest phonetics to Telugu on Android
+  const hiIN = voices.find(v => v.lang === "hi-IN");
+  if (hiIN) return hiIN;
+
+  // Any Indian English — better than US/UK for Indian names
+  const enIN = voices.find(v => v.lang === "en-IN");
+  if (enIN) return enIN;
+
+  // Any Indian locale
+  const indian = voices.find(v => v.lang.includes("IN") || v.lang.includes("in-IN"));
+  if (indian) return indian;
+
+  // Last resort — first available
+  return voices[0] || null;
+}
+
+// Optimal speech parameters per voice language
+function getSpeechParams(voice) {
+  if (!voice) return { rate: 0.88, pitch: 1.0 };
+  const lang = voice.lang.toLowerCase();
+  if (lang.startsWith("te"))   return { rate: 0.82, pitch: 1.0 };  // Telugu — slightly slow, natural pitch
+  if (lang.startsWith("hi"))   return { rate: 0.80, pitch: 0.95 }; // Hindi — slower so Telugu words sound right
+  if (lang.includes("en-in"))  return { rate: 0.78, pitch: 1.0 };  // Indian English
+  return { rate: 0.85, pitch: 1.0 };
+}
   const days = daysDiff(c.dueDate), amt = fmt(c.amountDue), shop = settings.shopName||"Shop", upi = settings.upiId||"shop@upi";
   const desc = c.desc ? `\nVivrana: ${c.desc}` : "";
   const descTe = c.desc ? `\nవివరణ: ${c.desc}` : "";
@@ -659,23 +749,22 @@ function VoiceModal({ c, settings, t, onClose }) {
   const supported = "speechSynthesis" in window;
   const canRecord = !!(navigator.mediaDevices && window.MediaRecorder);
 
-  const getBestVoice = () => {
-    const v = window.speechSynthesis.getVoices();
-    return v.find(x=>x.lang==="te-IN") || v.find(x=>x.lang.startsWith("te")) ||
-      v.find(x=>x.lang==="hi-IN") || v.find(x=>x.lang.includes("IN")) ||
-      v.find(x=>x.lang.startsWith("en")) || null;
-  };
-
-  // ── Play only (no recording) ─────────────────────────────────────
+  // ── Play only (no recording) ──────────────────────────────────────
   const doPlay = () => {
     if (!supported) { setStatus("error"); return; }
     window.speechSynthesis.cancel();
     clearInterval(timerRef.current);
     setProgress(0); setStatus("loading");
+
     const trySpeak = () => {
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang="te-IN"; utter.rate=0.8; utter.pitch=1.05; utter.volume=1;
-      const voice = getBestVoice(); if(voice) utter.voice=voice;
+      const voice  = getBestVoiceForTelugu();
+      const params = getSpeechParams(voice);
+      const utter  = new SpeechSynthesisUtterance(text);
+      utter.lang   = voice ? voice.lang : "te-IN";
+      utter.rate   = params.rate;
+      utter.pitch  = params.pitch;
+      utter.volume = 1;
+      if (voice) utter.voice = voice;
       utter.onstart  = () => setStatus("speaking");
       utter.onend    = () => { setStatus("done"); setProgress(100); clearInterval(timerRef.current); };
       utter.onerror  = e => { if(e.error!=="interrupted"&&e.error!=="canceled") setStatus("error"); };
@@ -683,13 +772,21 @@ function VoiceModal({ c, settings, t, onClose }) {
       utter.onresume = () => setStatus("speaking");
       window.speechSynthesis.speak(utter);
       setStatus("speaking");
-      const est = Math.max(4000, text.length*75);
-      let el=0;
-      timerRef.current=setInterval(()=>{ el+=300; setProgress(Math.min(94,Math.round(el/est*100))); if(el>=est) clearInterval(timerRef.current); },300);
+      const est = Math.max(4000, text.length * 72);
+      let el = 0;
+      timerRef.current = setInterval(() => {
+        el += 300;
+        setProgress(Math.min(94, Math.round(el / est * 100)));
+        if (el >= est) clearInterval(timerRef.current);
+      }, 300);
     };
-    const voices=window.speechSynthesis.getVoices();
-    if(voices.length>0) setTimeout(trySpeak,80);
-    else window.speechSynthesis.onvoiceschanged=()=>setTimeout(trySpeak,80);
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) setTimeout(trySpeak, 80);
+    else {
+      window.speechSynthesis.onvoiceschanged = () => setTimeout(trySpeak, 80);
+      window.speechSynthesis.getVoices(); // trigger load
+    }
   };
 
   const doPause  = () => { window.speechSynthesis.pause(); setStatus("paused"); clearInterval(timerRef.current); };
@@ -772,13 +869,14 @@ function VoiceModal({ c, settings, t, onClose }) {
         if (el >= est) clearInterval(timerRef.current);
       }, 300);
 
-      // Build utterance
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang    = "te-IN";
-      utter.rate    = 0.78;
-      utter.pitch   = 1.05;
-      utter.volume  = 1;
-      const voice = getBestVoice();
+      // Build utterance with best voice + optimal params
+      const voice  = getBestVoiceForTelugu();
+      const params = getSpeechParams(voice);
+      const utter  = new SpeechSynthesisUtterance(text);
+      utter.lang   = voice ? voice.lang : "te-IN";
+      utter.rate   = params.rate;
+      utter.pitch  = params.pitch;
+      utter.volume = 1;
       if (voice) utter.voice = voice;
 
       utter.onstart = () => setRecStatus("Recording... voice is playing");
@@ -928,10 +1026,26 @@ function VoiceModal({ c, settings, t, onClose }) {
           </div>
         </div>
 
-        {/* Script text */}
-        <div style={{ background:"#0f172a", border:"1px solid #1e3a5f", borderRadius:14, padding:12, marginBottom:14 }}>
-          <p style={{ color:"#64748b", fontSize:10, fontWeight:700, marginBottom:4 }}>{t.voiceMsg}</p>
-          <p style={{ color:"#94a3b8", fontSize:12, lineHeight:1.8, margin:0 }}>{text}</p>
+        {/* Script text + active voice info */}
+        <div style={{ background:"#0f172a", border:"1px solid #1e3a5f", borderRadius:14, padding:12, marginBottom:10 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+            <p style={{ color:"#64748b", fontSize:10, fontWeight:700, margin:0 }}>{t.voiceMsg}</p>
+            {/* Show which voice engine will be used */}
+            {(() => {
+              const v = getBestVoiceForTelugu();
+              if (!v) return <span style={{ fontSize:9, color:"#ef4444", fontWeight:600 }}>No voice found</span>;
+              const isTE = v.lang.startsWith("te");
+              const isHI = v.lang.startsWith("hi");
+              return (
+                <span style={{ fontSize:9, fontWeight:700, color: isTE?"#34d399":isHI?"#fbbf24":"#94a3b8",
+                  background: isTE?"rgba(16,185,129,0.15)":isHI?"rgba(245,158,11,0.15)":"rgba(100,116,139,0.15)",
+                  padding:"2px 6px", borderRadius:6 }}>
+                  {isTE ? "Telugu voice" : isHI ? "Hindi voice (closest)" : v.lang}
+                </span>
+              );
+            })()}
+          </div>
+          <p style={{ color:"#94a3b8", fontSize:12, lineHeight:1.9, margin:0 }}>{text}</p>
         </div>
 
         {/* Waveform animation */}
