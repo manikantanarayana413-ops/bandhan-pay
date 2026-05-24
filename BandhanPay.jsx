@@ -696,126 +696,189 @@ function VoiceModal({ c, settings, t, onClose }) {
   const doResume = () => { window.speechSynthesis.resume(); setStatus("speaking"); };
   const doStop   = () => { window.speechSynthesis.cancel(); setStatus("idle"); setProgress(0); clearInterval(timerRef.current); stopRecording(); };
 
-  // ── Record audio using microphone + speaker output ───────────────
-  // Strategy: use AudioContext + MediaStreamDestination to capture
-  // the SpeechSynthesis output directly without needing mic
+  // ── Record audio — mic captures what the speaker plays ──────────
+  // SpeechSynthesis plays through the device speaker.
+  // We capture it by: speak FIRST (so user hears it), then
+  // use getUserMedia (mic) to record what the speaker outputs.
+  // On mobile the mic picks up the speaker clearly.
+  // On desktop: user should hold phone near speaker OR use headphones.
   const doRecord = async () => {
     if (!supported) { setStatus("error"); return; }
-    if (!canRecord) { setRecStatus("Recording not supported in this browser. Use Chrome."); return; }
+    if (!canRecord) {
+      setRecStatus("Recording not supported. Use Chrome on Android.");
+      return;
+    }
 
     try {
-      setRecStatus("Requesting microphone to capture audio...");
       setStatus("loading");
+      setRecStatus("Requesting microphone permission...");
       setAudioURL(null);
       setAudioBlob(null);
       chunksRef.current = [];
 
-      // We use display media or mic to capture — simplest approach:
-      // speak + record via AudioContext destination node
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const dest     = audioCtx.createMediaStreamDestination();
+      // Request microphone
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      streamRef.current = stream;
 
-      // MediaRecorder on the destination stream
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
-        : MediaRecorder.isTypeSupported("audio/ogg")  ? "audio/ogg"
-        : "audio/webm";
+      // Pick best supported mime type
+      const mimeType =
+        MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" :
+        MediaRecorder.isTypeSupported("audio/webm")             ? "audio/webm" :
+        MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")  ? "audio/ogg;codecs=opus" :
+        MediaRecorder.isTypeSupported("audio/mp4")              ? "audio/mp4" :
+        "audio/webm";
 
-      const mr = new MediaRecorder(dest.stream, { mimeType });
+      const mr = new MediaRecorder(stream, { mimeType });
       mediaRecRef.current = mr;
 
-      mr.ondataavailable = e => { if(e.data && e.data.size>0) chunksRef.current.push(e.data); };
+      mr.ondataavailable = e => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
       mr.onstop = () => {
+        // Stop mic tracks
+        stream.getTracks().forEach(t => t.stop());
+        if (chunksRef.current.length === 0) {
+          setStatus("error");
+          setRecStatus("No audio captured. Make sure microphone is near speaker.");
+          return;
+        }
         const blob = new Blob(chunksRef.current, { type: mimeType });
-        const url  = URL.createObjectURL(blob);
+        if (blob.size < 500) {
+          setStatus("error");
+          setRecStatus("Audio too short or empty. Try again — hold mic near speaker.");
+          return;
+        }
+        const url = URL.createObjectURL(blob);
         setAudioBlob(blob);
         setAudioURL(url);
         setStatus("recorded");
         setProgress(100);
-        setRecStatus("Audio recorded! Download and send via WhatsApp.");
-        audioCtx.close();
+        setRecStatus("Audio saved! Play to check, then share via WhatsApp.");
       };
 
+      // Start recording
       mr.start(100);
       setStatus("recording");
-      setRecStatus("Recording voice...");
+      setRecStatus("Recording... (speaking now — keep mic near device)");
 
-      // Speak the text — AudioContext captures it
+      // Progress bar
+      const est = Math.max(6000, text.length * 85);
+      let el = 0;
+      clearInterval(timerRef.current);
+      timerRef.current = setInterval(() => {
+        el += 300;
+        setProgress(Math.min(92, Math.round(el / est * 100)));
+        if (el >= est) clearInterval(timerRef.current);
+      }, 300);
+
+      // Build utterance
       const utter = new SpeechSynthesisUtterance(text);
-      utter.lang="te-IN"; utter.rate=0.8; utter.pitch=1.05; utter.volume=1;
-      const voice=getBestVoice(); if(voice) utter.voice=voice;
+      utter.lang    = "te-IN";
+      utter.rate    = 0.78;
+      utter.pitch   = 1.05;
+      utter.volume  = 1;
+      const voice = getBestVoice();
+      if (voice) utter.voice = voice;
 
-      // Progress simulation
-      const est=Math.max(5000, text.length*80);
-      let el=0; clearInterval(timerRef.current);
-      timerRef.current=setInterval(()=>{ el+=300; setProgress(Math.min(90,Math.round(el/est*100))); if(el>=est) clearInterval(timerRef.current); },300);
+      utter.onstart = () => setRecStatus("Recording... voice is playing");
 
-      utter.onend=()=>{
+      utter.onend = () => {
         clearInterval(timerRef.current);
-        setTimeout(()=>{ if(mr.state!=="inactive") mr.stop(); },300);
-      };
-      utter.onerror=()=>{
-        mr.stop();
-        setStatus("error");
-        setRecStatus("Speech failed. Please use Chrome/Edge.");
+        // Give a short tail before stopping
+        setTimeout(() => {
+          if (mr.state !== "inactive") mr.stop();
+        }, 600);
       };
 
+      utter.onerror = (e) => {
+        clearInterval(timerRef.current);
+        if (mr.state !== "inactive") mr.stop();
+        if (e.error !== "interrupted" && e.error !== "canceled") {
+          setStatus("error");
+          setRecStatus("Speech error: " + (e.error || "unknown") + ". Use Chrome.");
+        }
+      };
+
+      // Cancel any existing speech then speak
       window.speechSynthesis.cancel();
-      setTimeout(()=>window.speechSynthesis.speak(utter), 200);
+      setTimeout(() => window.speechSynthesis.speak(utter), 150);
 
-    } catch(err) {
+    } catch (err) {
       setStatus("error");
-      setRecStatus("Could not start recording: "+err.message+". Try Chrome.");
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        setRecStatus("Microphone permission denied. Allow mic in browser settings.");
+      } else {
+        setRecStatus("Error: " + err.message);
+      }
     }
   };
 
   const stopRecording = () => {
-    if(mediaRecRef.current && mediaRecRef.current.state!=="inactive") {
+    window.speechSynthesis.cancel();
+    clearInterval(timerRef.current);
+    if (mediaRecRef.current && mediaRecRef.current.state !== "inactive") {
       mediaRecRef.current.stop();
     }
-    if(streamRef.current) {
-      streamRef.current.getTracks().forEach(t=>t.stop());
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
   };
 
-  // ── Download audio file ──────────────────────────────────────────
+  // ── Download audio ────────────────────────────────────────────────
   const doDownload = () => {
     if (!audioBlob || !audioURL) return;
-    const a = document.createElement("a");
-    a.href = audioURL;
-    a.download = `Voice-Reminder-${c.name}-Rs${c.amountDue}.webm`;
+    const ext  = audioBlob.type.includes("ogg") ? "ogg" : audioBlob.type.includes("mp4") ? "m4a" : "webm";
+    const name = `VoiceReminder-${c.name.replace(/\s+/g,"-")}-Rs${c.amountDue}.${ext}`;
+    const a    = document.createElement("a");
+    a.href     = audioURL;
+    a.download = name;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
   };
 
-  // ── WhatsApp: open chat so user can attach the audio file ────────
-  // WhatsApp web/app does NOT allow pre-attaching files via URL.
-  // Best approach: download the file first, then open WA chat.
-  // The user attaches it manually (one tap on attachment icon).
-  const doWhatsApp = () => {
-    const waText = `Voice reminder for ${c.name} - Rs.${fmt(c.amountDue)} pending. Please pay via UPI: ${settings.upiId||"shop@upi"}`;
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(waText)}`, "_blank");
-  };
-
+  // ── Share audio via WhatsApp ─────────────────────────────────────
+  // Web Share API (navigator.share) on Android Chrome can share files
+  // directly to WhatsApp as a voice/audio message.
   const doShareAudio = async () => {
-    if (!audioBlob) { doWhatsApp(); return; }
-    // Use Web Share API if available (mobile Chrome/Safari) — can share actual file
-    if (navigator.share && navigator.canShare) {
-      const file = new File([audioBlob], `VoiceReminder-${c.name}.webm`, { type: audioBlob.type });
-      if (navigator.canShare({ files:[file] })) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: `Voice Reminder — ${c.name}`,
-            text: `Rs.${fmt(c.amountDue)} payment reminder from ${settings.shopName||"Shop"}`,
-          });
-          return;
-        } catch(e) { /* user cancelled or error — fall through */ }
+    if (!audioBlob) {
+      // No audio yet — just open WhatsApp with text
+      const waText = `Voice reminder: ${c.name} - Rs.${fmt(c.amountDue)} pending.\nPay via UPI: ${settings.upiId||"shop@upi"}`;
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(waText)}`, "_blank");
+      return;
+    }
+
+    const ext  = audioBlob.type.includes("ogg") ? "ogg" : audioBlob.type.includes("mp4") ? "m4a" : "webm";
+    const file = new File(
+      [audioBlob],
+      `VoiceReminder-${c.name.replace(/\s+/g,"-")}.${ext}`,
+      { type: audioBlob.type }
+    );
+
+    // Try Web Share API first (Android Chrome, iOS Safari 15+)
+    if (navigator.share) {
+      try {
+        const shareData = { files: [file], title: `Voice Reminder — ${c.name}`, text: `Rs.${fmt(c.amountDue)} due` };
+        if (navigator.canShare && navigator.canShare(shareData)) {
+          await navigator.share(shareData);
+          return; // success — WhatsApp share sheet opened
+        }
+      } catch (e) {
+        // User cancelled or share failed — fall through to download
+        if (e.name === "AbortError") return; // user cancelled deliberately
       }
     }
-    // Fallback: download file + open WhatsApp
+
+    // Fallback: download file first, then open WA
+    // User then taps attachment (📎) in WhatsApp to send the saved file
     doDownload();
-    setTimeout(doWhatsApp, 800);
+    setRecStatus("File downloaded! Open WhatsApp → tap 📎 → select the file.");
+    setTimeout(() => {
+      const waText = `Voice reminder: ${c.name} - Rs.${fmt(c.amountDue)} pending. Attach the downloaded audio file.`;
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(waText)}`, "_blank");
+    }, 1500);
   };
 
   useEffect(() => () => {
@@ -895,71 +958,91 @@ function VoiceModal({ c, settings, t, onClose }) {
         {!supported ? (
           <div style={{ background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:14, padding:12, textAlign:"center", marginBottom:10 }}>
             <p style={{ color:"#f87171", fontSize:12, fontWeight:700, margin:"0 0 4px" }}>Browser not supported</p>
-            <p style={{ color:"#94a3b8", fontSize:11, margin:0 }}>Please use Google Chrome or Edge for voice.</p>
+            <p style={{ color:"#94a3b8", fontSize:11, margin:0 }}>Please use Google Chrome on Android for voice recording.</p>
           </div>
         ) : (
           <>
-            {/* ── Row 1: Play controls ── */}
-            <div style={{ marginBottom:8 }}>
-              <p style={{ color:"#475569", fontSize:10, fontWeight:700, marginBottom:6 }}>PLAY (preview only)</p>
+            {/* ── Step 1: Play / Preview ── */}
+            <div style={{ background:"rgba(30,41,59,0.8)", border:"1px solid #334155", borderRadius:16, padding:12, marginBottom:10 }}>
+              <p style={{ color:"#94a3b8", fontSize:10, fontWeight:800, marginBottom:8, letterSpacing:1 }}>STEP 1 — PREVIEW VOICE</p>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
                 {(status==="idle"||status==="done"||status==="error"||status==="recorded") ? (
-                  <button onClick={doPlay} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>▶ {t.play}</button>
+                  <button onClick={doPlay} style={{ background:"#1e3a5f", border:"1px solid #3b82f6", borderRadius:12, padding:10, color:"#60a5fa", fontWeight:700, fontSize:12, cursor:"pointer" }}>▶ {t.play}</button>
                 ) : status==="speaking" ? (
-                  <button onClick={doPause} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>⏸ {t.pause}</button>
+                  <button onClick={doPause} style={{ background:"#334155", border:"none", borderRadius:12, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>⏸ {t.pause}</button>
                 ) : status==="paused" ? (
-                  <button onClick={doResume} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>▶ Resume</button>
+                  <button onClick={doResume} style={{ background:"#1e3a5f", border:"1px solid #3b82f6", borderRadius:12, padding:10, color:"#60a5fa", fontWeight:700, fontSize:12, cursor:"pointer" }}>▶ Resume</button>
                 ) : (
-                  <button disabled style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:14, padding:10, color:"#475569", fontSize:12, cursor:"not-allowed" }}>▶ {t.play}</button>
+                  <button disabled style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:12, padding:10, color:"#475569", fontSize:12, cursor:"not-allowed" }}>▶ {t.play}</button>
                 )}
-                <button onClick={doPlay} style={{ background:"#334155", border:"none", borderRadius:14, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>🔄 {t.replay}</button>
-                <button onClick={doStop} style={{ background:"rgba(220,38,38,0.15)", border:"1px solid rgba(220,38,38,0.3)", borderRadius:14, padding:10, color:"#f87171", fontWeight:700, fontSize:12, cursor:"pointer" }}>⏹ {t.stop}</button>
+                <button onClick={doPlay} style={{ background:"#334155", border:"none", borderRadius:12, padding:10, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>🔄 {t.replay}</button>
+                <button onClick={doStop} style={{ background:"rgba(220,38,38,0.15)", border:"1px solid rgba(220,38,38,0.3)", borderRadius:12, padding:10, color:"#f87171", fontWeight:700, fontSize:12, cursor:"pointer" }}>⏹ {t.stop}</button>
               </div>
             </div>
 
-            {/* ── Row 2: Record audio ── */}
-            <div style={{ background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.25)", borderRadius:16, padding:12, marginBottom:10 }}>
-              <p style={{ color:"#a78bfa", fontSize:10, fontWeight:700, marginBottom:8 }}>RECORD AUDIO FILE (for WhatsApp)</p>
+            {/* ── Step 2: Record ── */}
+            <div style={{ background:"rgba(167,139,250,0.08)", border:"1px solid rgba(167,139,250,0.3)", borderRadius:16, padding:12, marginBottom:10 }}>
+              <p style={{ color:"#a78bfa", fontSize:10, fontWeight:800, marginBottom:6, letterSpacing:1 }}>STEP 2 — RECORD AUDIO</p>
+              <p style={{ color:"#64748b", fontSize:10, marginBottom:10, lineHeight:1.5 }}>
+                Keep phone volume HIGH. The mic records what the speaker plays.
+              </p>
               {status==="recording" ? (
-                <button onClick={()=>{ if(mediaRecRef.current&&mediaRecRef.current.state!=="inactive") mediaRecRef.current.stop(); window.speechSynthesis.cancel(); }}
-                  style={{ width:"100%", background:"rgba(220,38,38,0.2)", border:"1px solid rgba(220,38,38,0.4)", borderRadius:14, padding:11, color:"#f87171", fontWeight:800, fontSize:13, cursor:"pointer" }}>
-                  ⏹ Stop Recording
+                <button onClick={stopRecording}
+                  style={{ width:"100%", background:"rgba(220,38,38,0.2)", border:"2px solid #ef4444", borderRadius:14, padding:12, color:"#f87171", fontWeight:800, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                  <motion.span animate={{ opacity:[1,0.3,1] }} transition={{ repeat:Infinity, duration:1 }} style={{ width:10, height:10, borderRadius:"50%", background:"#ef4444", display:"inline-block" }}/>
+                  RECORDING... Tap to Stop
                 </button>
               ) : (
-                <button onClick={doRecord} disabled={!canRecord}
-                  style={{ width:"100%", background:canRecord?"rgba(167,139,250,0.25)":"#1e293b", border:`1px solid ${canRecord?"rgba(167,139,250,0.5)":"#334155"}`, borderRadius:14, padding:11, color:canRecord?"#c4b5fd":"#475569", fontWeight:800, fontSize:13, cursor:canRecord?"pointer":"not-allowed" }}>
-                  {canRecord ? "⏺ Record Audio File" : "Recording not supported (use Chrome)"}
+                <button onClick={doRecord} disabled={!canRecord || status==="speaking" || status==="loading"}
+                  style={{ width:"100%", background:canRecord?"rgba(167,139,250,0.2)":"#1e293b", border:`1px solid ${canRecord?"rgba(167,139,250,0.5)":"#334155"}`, borderRadius:14, padding:12, color:canRecord?"#c4b5fd":"#475569", fontWeight:800, fontSize:13, cursor:canRecord?"pointer":"not-allowed" }}>
+                  {canRecord ? "⏺  Record Audio File" : "Not supported — use Chrome on Android"}
                 </button>
               )}
             </div>
 
-            {/* ── Row 3: Audio player + actions (shown after recording) ── */}
+            {/* ── Step 3: Audio player + share (shown after recording) ── */}
             {audioURL && (
               <motion.div initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }}
-                style={{ background:"rgba(16,185,129,0.08)", border:"1px solid rgba(16,185,129,0.3)", borderRadius:16, padding:12, marginBottom:10 }}>
-                <p style={{ color:"#34d399", fontSize:11, fontWeight:700, marginBottom:8 }}>Audio Ready — Rs.{fmt(c.amountDue)}</p>
-                {/* Native audio player */}
-                <audio controls src={audioURL} style={{ width:"100%", borderRadius:10, marginBottom:10, height:36 }} />
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                  <button onClick={doDownload}
-                    style={{ background:"#1d4ed8", border:"none", borderRadius:14, padding:11, color:"#fff", fontWeight:700, fontSize:12, cursor:"pointer" }}>
-                    Download .webm
-                  </button>
-                  <button onClick={doShareAudio}
-                    style={{ background:"#059669", border:"none", borderRadius:14, padding:11, color:"#fff", fontWeight:800, fontSize:12, cursor:"pointer" }}>
-                    Share via WhatsApp
-                  </button>
+                style={{ background:"rgba(16,185,129,0.08)", border:"1px solid rgba(16,185,129,0.35)", borderRadius:16, padding:14, marginBottom:10 }}>
+                <p style={{ color:"#34d399", fontSize:10, fontWeight:800, marginBottom:10, letterSpacing:1 }}>STEP 3 — SEND VIA WHATSAPP</p>
+
+                {/* Native HTML5 audio player — plays the recorded audio */}
+                <div style={{ background:"#0f172a", borderRadius:12, padding:8, marginBottom:12 }}>
+                  <p style={{ color:"#64748b", fontSize:10, marginBottom:6, fontWeight:600 }}>Listen before sending:</p>
+                  <audio
+                    controls
+                    src={audioURL}
+                    style={{ width:"100%", height:40, borderRadius:8 }}
+                    preload="auto"
+                  />
                 </div>
-                <p style={{ color:"#475569", fontSize:10, marginTop:8, lineHeight:1.5, textAlign:"center" }}>
-                  Download the audio file, then open WhatsApp and attach it as a voice message.
+
+                {/* Share button — Web Share API on mobile sends file directly to WhatsApp */}
+                <button onClick={doShareAudio}
+                  style={{ width:"100%", background:"#059669", border:"none", borderRadius:14, padding:13, color:"#fff", fontWeight:800, fontSize:14, cursor:"pointer", marginBottom:8, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                  <span style={{ fontSize:18 }}>📲</span>  Share Audio on WhatsApp
+                </button>
+
+                {/* Download button */}
+                <button onClick={doDownload}
+                  style={{ width:"100%", background:"rgba(29,78,216,0.2)", border:"1px solid rgba(29,78,216,0.4)", borderRadius:14, padding:10, color:"#60a5fa", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+                  Download Audio File
+                </button>
+
+                <p style={{ color:"#475569", fontSize:10, marginTop:8, lineHeight:1.6, textAlign:"center" }}>
+                  On Android: tap Share → WhatsApp → select contact → send<br/>
+                  On desktop: download file → open WhatsApp Web → tap 📎 → attach
                 </p>
               </motion.div>
             )}
 
-            {/* ── Row 4: Fallback text WA (always available) ── */}
-            <button onClick={doWhatsApp}
-              style={{ width:"100%", background:"rgba(5,150,105,0.15)", border:"1px solid rgba(5,150,105,0.3)", borderRadius:14, padding:10, color:"#34d399", fontWeight:700, fontSize:12, cursor:"pointer" }}>
-              Send Text Reminder via WhatsApp
+            {/* ── Fallback text WA ── */}
+            <button onClick={() => {
+              const waText = `Voice reminder: ${c.name} - Rs.${fmt(c.amountDue)} pending.\nPay via UPI: ${settings.upiId||"shop@upi"}`;
+              window.open(`https://wa.me/${phone}?text=${encodeURIComponent(waText)}`, "_blank");
+            }}
+              style={{ width:"100%", background:"rgba(5,150,105,0.1)", border:"1px solid rgba(5,150,105,0.25)", borderRadius:14, padding:10, color:"#34d399", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+              Send Text Reminder via WhatsApp (no audio)
             </button>
           </>
         )}
