@@ -370,6 +370,8 @@ function getSpeechParams(voice) {
   if (lang.includes("en-in"))  return { rate: 0.78, pitch: 1.0 };  // Indian English
   return { rate: 0.85, pitch: 1.0 };
 }
+
+function buildCall(c, settings, lang) {
   const days = daysDiff(c.dueDate), amt = fmt(c.amountDue), shop = settings.shopName||"Shop", upi = settings.upiId||"shop@upi";
   const desc = c.desc ? `\nVivrana: ${c.desc}` : "";
   const descTe = c.desc ? `\nవివరణ: ${c.desc}` : "";
